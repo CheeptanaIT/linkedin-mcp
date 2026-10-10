@@ -10,7 +10,9 @@
     "dev": "tsc -p tsconfig.json && node --disable-warning=ExperimentalWarning dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "deploy": "wrangler deploy",
-    "import": "node scripts/import-linkedin.mjs"
+    "import": "node scripts/import-linkedin.mjs",
+    "test": "tsc -p tsconfig.json && node --test \"dist/test/**/*.test.js\"",
+    "backup": "node scripts/backup.mjs"
   },
   "engines": {
     "node": ">=22.13"

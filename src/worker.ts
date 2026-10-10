@@ -465,6 +465,22 @@ async function handleImport(kind: string, request: Request, env: Env): Promise<R
   }
 }
 
+// ส่งออกทุกตารางเป็น JSON เพื่อสำรองข้อมูล (ต้องมี Bearer token เท่านั้น)
+const EXPORT_TABLES = [
+  "contacts", "tags", "contact_tags", "notes", "followups", "invitations",
+  "jobs", "job_matches", "applications", "profile", "posts", "pending_actions", "audit_log",
+];
+
+async function exportAll(env: Env): Promise<Response> {
+  const data: Record<string, unknown[]> = {};
+  for (const table of EXPORT_TABLES) {
+    data[table] = (await env.DB.prepare(`SELECT * FROM ${table}`).all()).results;
+  }
+  return Response.json({ exported_at: new Date().toISOString(), tables: data }, {
+    headers: { "Content-Disposition": "attachment; filename=linkedin-mcp-backup.json" },
+  });
+}
+
 export default {
   // Cron ทุก 5 นาที: โพสต์งานที่ตั้งเวลาไว้เมื่อถึงเวลา
   async scheduled(_event: unknown, env: Env) {
@@ -512,7 +528,7 @@ export default {
     }
 
     const isImport = url.pathname.startsWith("/import/");
-    if (url.pathname !== "/mcp" && !isImport) {
+    if (url.pathname !== "/mcp" && url.pathname !== "/export" && !isImport) {
       return new Response("Not found", { status: 404 });
     }
 
@@ -521,6 +537,11 @@ export default {
         status: 401,
         headers: { "WWW-Authenticate": 'Bearer realm="linkedin-mcp"' },
       });
+    }
+
+    if (url.pathname === "/export") {
+      if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
+      return exportAll(env);
     }
 
     if (isImport) {

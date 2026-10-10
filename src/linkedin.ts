@@ -156,7 +156,13 @@ export async function handleOAuthCallback(env: Env, url: URL): Promise<Response>
 export async function linkedInStatus(env: Env) {
   try {
     const t = await loadToken(env);
-    return { connected: true, expires_at: t.expires_at };
+    const daysLeft = Math.floor((new Date(t.expires_at).getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+    return {
+      connected: true,
+      expires_at: t.expires_at,
+      days_left: daysLeft,
+      warning: daysLeft <= 7 ? "token ใกล้หมดอายุ ควรเชื่อมต่อใหม่ด้วย linkedin_connect" : null,
+    };
   } catch (err) {
     return { connected: false, reason: err instanceof Error ? err.message : String(err) };
   }
