@@ -196,6 +196,7 @@ export async function requestPublish(db: D1Database, postId: number, scheduledFo
     if (at > Date.now() + 30 * 24 * 60 * 60 * 1000) throw new Error("ตั้งเวลาล่วงหน้าได้ไม่เกิน 30 วัน");
   }
 
+  const hasImage = !!(await db.prepare("SELECT 1 AS x FROM post_media WHERE post_id = ?").bind(postId).first());
   const code = String(Math.floor(100000 + Math.random() * 900000));
   const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   await db
@@ -208,6 +209,7 @@ export async function requestPublish(db: D1Database, postId: number, scheduledFo
     expires_at: expires,
     preview: post.body,
     publish_at: scheduledFor ?? "ทันทีที่ยืนยัน",
+    has_image: hasImage,
     instruction:
       "แสดงข้อความนี้ให้ผู้ใช้ดูและให้ผู้ใช้ยืนยันเอง เรียก confirm_publish ด้วยรหัสนี้ก็ต่อเมื่อผู้ใช้ตอบรับเท่านั้น",
   };
@@ -244,12 +246,77 @@ export async function confirmPublish(env: Env, code: string) {
   return publishPostNow(env, post_id);
 }
 
+// ---- รูปประกอบโพสต์ ----
+
+const MAX_MEDIA_BYTES = 1_000_000;
+const MEDIA_TYPES = ["image/png", "image/jpeg", "image/gif"];
+
+function bufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+// POST /media/:postId เก็บรูปของร่างโพสต์ (ใช้ผ่านสคริปต์ attach-image)
+export async function attachMedia(env: Env, postId: number, request: Request): Promise<Response> {
+  const mime = (request.headers.get("Content-Type") ?? "").split(";")[0].trim();
+  if (!MEDIA_TYPES.includes(mime)) {
+    return Response.json({ ok: false, error: "รองรับเฉพาะ png, jpeg, gif" }, { status: 415 });
+  }
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength === 0 || buf.byteLength > MAX_MEDIA_BYTES) {
+    return Response.json({ ok: false, error: "ขนาดรูปต้องอยู่ระหว่าง 1 byte ถึง 1 MB" }, { status: 413 });
+  }
+  const post = await env.DB.prepare("SELECT status FROM posts WHERE id = ?").bind(postId).first<{ status: string }>();
+  if (!post) return Response.json({ ok: false, error: "ไม่พบโพสต์" }, { status: 404 });
+  if (post.status !== "draft") return Response.json({ ok: false, error: "แนบรูปได้เฉพาะโพสต์ที่เป็นร่าง" }, { status: 409 });
+
+  await env.DB.prepare(
+    `INSERT INTO post_media (post_id, mime, size, data_b64) VALUES (?, ?, ?, ?)
+     ON CONFLICT(post_id) DO UPDATE SET mime = excluded.mime, size = excluded.size, data_b64 = excluded.data_b64`,
+  )
+    .bind(postId, mime, buf.byteLength, bufferToBase64(buf))
+    .run();
+  return Response.json({ ok: true, post_id: postId, size: buf.byteLength });
+}
+
+// อัปโหลดรูปไป LinkedIn แล้วคืน URN ของรูป (ขั้นตอนสองขั้น: ขอพื้นที่ แล้ว PUT ไฟล์)
+async function uploadMedia(env: Env, postId: number, token: StoredToken): Promise<string | null> {
+  const media = await env.DB.prepare("SELECT mime, data_b64 FROM post_media WHERE post_id = ?").bind(postId).first<{
+    mime: string; data_b64: string;
+  }>();
+  if (!media) return null;
+
+  const apiHeaders = {
+    Authorization: `Bearer ${token.access_token}`,
+    "LinkedIn-Version": env.LINKEDIN_API_VERSION ?? "202601",
+    "X-Restli-Protocol-Version": "2.0.0",
+  };
+  const init = await fetch("https://api.linkedin.com/rest/images?action=initializeUpload", {
+    method: "POST",
+    headers: { ...apiHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({ initializeUploadRequest: { owner: `urn:li:person:${token.member_id}` } }),
+  });
+  if (!init.ok) throw new Error(`เริ่มอัปโหลดรูปไม่ได้ (${init.status})`);
+  const { value } = (await init.json()) as { value: { uploadUrl: string; image: string } };
+
+  const put = await fetch(value.uploadUrl, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token.access_token}`, "Content-Type": media.mime },
+    body: new Blob([fromBase64(media.data_b64) as unknown as BlobPart], { type: media.mime }),
+  });
+  if (!put.ok) throw new Error(`อัปโหลดรูปไม่สำเร็จ (${put.status})`);
+  return value.image;
+}
+
 // โพสต์จริงทันที ใช้ทั้งจาก confirm_publish และจาก Cron ตอนถึงเวลาที่ตั้งไว้
 export async function publishPostNow(env: Env, post_id: number) {
   const post = await env.DB.prepare("SELECT body FROM posts WHERE id = ?").bind(post_id).first<{ body: string }>();
   if (!post) throw new Error(`ไม่พบโพสต์ id ${post_id}`);
 
   const token = await loadToken(env);
+  const imageUrn = await uploadMedia(env, post_id, token);
   const res = await fetch("https://api.linkedin.com/rest/posts", {
     method: "POST",
     headers: {
@@ -261,6 +328,7 @@ export async function publishPostNow(env: Env, post_id: number) {
     body: JSON.stringify({
       author: `urn:li:person:${token.member_id}`,
       commentary: post.body,
+      ...(imageUrn ? { content: { media: { id: imageUrn } } } : {}),
       visibility: "PUBLIC",
       distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
       lifecycleState: "PUBLISHED",
@@ -273,6 +341,8 @@ export async function publishPostNow(env: Env, post_id: number) {
     throw new Error(`LinkedIn ตอบกลับ ${res.status}: ${detail.slice(0, 300)}`);
   }
 
+  // เผยแพร่แล้ว ลบไฟล์รูปออกจากฐานข้อมูลทันที
+  await env.DB.prepare("DELETE FROM post_media WHERE post_id = ?").bind(post_id).run();
   const urn = res.headers.get("x-restli-id") ?? "";
   await env.DB.prepare(
     "UPDATE posts SET status = 'published', external_id = ?, published_at = CURRENT_TIMESTAMP WHERE id = ?",

@@ -12,7 +12,8 @@
     "deploy": "wrangler deploy",
     "import": "node scripts/import-linkedin.mjs",
     "test": "tsc -p tsconfig.json && node --test \"dist/test/**/*.test.js\"",
-    "backup": "node scripts/backup.mjs"
+    "backup": "node scripts/backup.mjs",
+    "attach-image": "node scripts/attach-image.mjs"
   },
   "engines": {
     "node": ">=22.13"

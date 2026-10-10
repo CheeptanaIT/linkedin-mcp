@@ -23,6 +23,7 @@ import {
   linkedInStatus,
   listPosts,
   requestPublish,
+  attachMedia,
 } from "./linkedin.js";
 import {
   JobInput,
@@ -558,7 +559,8 @@ export default {
     }
 
     const isImport = url.pathname.startsWith("/import/");
-    if (url.pathname !== "/mcp" && url.pathname !== "/export" && !isImport) {
+    const isMedia = url.pathname.startsWith("/media/");
+    if (url.pathname !== "/mcp" && url.pathname !== "/export" && !isImport && !isMedia) {
       return new Response("Not found", { status: 404 });
     }
 
@@ -569,6 +571,13 @@ export default {
           "WWW-Authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource"`,
         },
       });
+    }
+
+    if (isMedia) {
+      if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
+      const postId = Number(url.pathname.slice("/media/".length));
+      if (!Number.isInteger(postId) || postId <= 0) return Response.json({ ok: false, error: "post id ไม่ถูกต้อง" }, { status: 400 });
+      return attachMedia(env, postId, request);
     }
 
     if (url.pathname === "/export") {
