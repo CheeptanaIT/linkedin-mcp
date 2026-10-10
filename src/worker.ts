@@ -24,6 +24,8 @@ import {
   listPosts,
   requestPublish,
   attachMedia,
+  attachImageBase64,
+  attachImageFromUrl,
 } from "./linkedin.js";
 import {
   JobInput,
@@ -423,6 +425,47 @@ function buildServer(env: Env): McpServer {
     },
     tool(env, "confirm_publish", async ({ confirmation_code }: { confirmation_code: string }) =>
       confirmPublish(env, confirmation_code),
+    ),
+  );
+
+  // รูปจากแชต (base64) ไม่บันทึกเนื้อรูปลง audit log เพราะจะใหญ่เกินไป
+  server.registerTool(
+    "attach_image",
+    {
+      description:
+        "แนบรูปกับร่างโพสต์ โดยส่งเนื้อรูปแบบ base64 (ไม่เกิน 1 MB) ใช้เมื่อผู้ใช้อัปโหลดรูปในแชต",
+      inputSchema: {
+        post_id: z.number().int(),
+        mime_type: z.enum(["image/png", "image/jpeg", "image/gif"]),
+        data_base64: z.string().min(4).max(1_400_000),
+      },
+    },
+    async (args: { post_id: number; mime_type: string; data_base64: string }) => {
+      try {
+        const result = await attachImageBase64(env, args.post_id, args.mime_type, args.data_base64);
+        await audit(db, "attach_image", { post_id: args.post_id, mime_type: args.mime_type, chars: args.data_base64.length }, result, true);
+        return json(result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await audit(db, "attach_image", { post_id: args.post_id, mime_type: args.mime_type, chars: args.data_base64.length }, { error: message }, false);
+        throw err;
+      }
+    },
+  );
+
+  // รูปที่สร้างด้วยเครื่องมืออื่น เช่น Canva ส่งเป็นลิงก์ https แล้วเซิร์ฟเวอร์ดาวน์โหลดเอง
+  server.registerTool(
+    "attach_image_from_url",
+    {
+      description:
+        "แนบรูปกับร่างโพสต์จากลิงก์ https ที่เป็นรูปโดยตรง เช่น ลิงก์ส่งออกจาก Canva (ไม่เกิน 1 MB)",
+      inputSchema: {
+        post_id: z.number().int(),
+        url: z.string().url().max(2000),
+      },
+    },
+    tool(env, "attach_image_from_url", async (args: { post_id: number; url: string }) =>
+      attachImageFromUrl(env, args.post_id, args.url),
     ),
   );
 

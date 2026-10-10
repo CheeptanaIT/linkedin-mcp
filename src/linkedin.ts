@@ -281,6 +281,41 @@ export async function attachMedia(env: Env, postId: number, request: Request): P
   return Response.json({ ok: true, post_id: postId, size: buf.byteLength });
 }
 
+// เก็บรูปจาก tool ผ่านแชต (ทั้งแบบ base64 และแบบดาวน์โหลดจากลิงก์)
+export async function storeMedia(env: Env, postId: number, mime: string, buf: ArrayBuffer) {
+  if (!MEDIA_TYPES.includes(mime)) throw new Error("รองรับเฉพาะ png, jpeg, gif");
+  if (buf.byteLength === 0 || buf.byteLength > MAX_MEDIA_BYTES) throw new Error("ขนาดรูปต้องอยู่ระหว่าง 1 byte ถึง 1 MB");
+  const post = await env.DB.prepare("SELECT status FROM posts WHERE id = ?").bind(postId).first<{ status: string }>();
+  if (!post) throw new Error(`ไม่พบโพสต์ id ${postId}`);
+  if (post.status !== "draft") throw new Error("แนบรูปได้เฉพาะโพสต์ที่เป็นร่าง");
+
+  await env.DB.prepare(
+    `INSERT INTO post_media (post_id, mime, size, data_b64) VALUES (?, ?, ?, ?)
+     ON CONFLICT(post_id) DO UPDATE SET mime = excluded.mime, size = excluded.size, data_b64 = excluded.data_b64`,
+  )
+    .bind(postId, mime, buf.byteLength, bufferToBase64(buf))
+    .run();
+  return { post_id: postId, size: buf.byteLength, mime };
+}
+
+export async function attachImageBase64(env: Env, postId: number, mime: string, dataBase64: string) {
+  const bytes = fromBase64(dataBase64);
+  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return storeMedia(env, postId, mime, buf);
+}
+
+// ดาวน์โหลดรูปจากลิงก์ https (เช่น ลิงก์ที่ได้จาก Canva) แล้วเก็บเข้าร่าง
+export async function attachImageFromUrl(env: Env, postId: number, url: string) {
+  const u = new URL(url);
+  if (u.protocol !== "https:") throw new Error("ต้องเป็นลิงก์ https เท่านั้น");
+  const res = await fetch(u, { redirect: "follow", signal: AbortSignal.timeout(15_000) });
+  if (!res.ok) throw new Error(`ดาวน์โหลดรูปไม่ได้ (${res.status})`);
+  const size = Number(res.headers.get("content-length") ?? 0);
+  if (size > MAX_MEDIA_BYTES) throw new Error("ขนาดรูปเกิน 1 MB");
+  const mime = (res.headers.get("content-type") ?? "").split(";")[0].trim();
+  return storeMedia(env, postId, mime, await res.arrayBuffer());
+}
+
 // อัปโหลดรูปไป LinkedIn แล้วคืน URN ของรูป (ขั้นตอนสองขั้น: ขอพื้นที่ แล้ว PUT ไฟล์)
 async function uploadMedia(env: Env, postId: number, token: StoredToken): Promise<string | null> {
   const media = await env.DB.prepare("SELECT mime, data_b64 FROM post_media WHERE post_id = ?").bind(postId).first<{
