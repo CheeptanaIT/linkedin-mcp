@@ -14,6 +14,7 @@ export interface D1Database {
 export interface Env {
   DB: D1Database;
   MCP_TOKEN: string;
+  OWNER_PASSWORD?: string;
   LINKEDIN_CLIENT_ID?: string;
   LINKEDIN_CLIENT_SECRET?: string;
   LINKEDIN_REDIRECT_URI?: string;

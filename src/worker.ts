@@ -7,6 +7,15 @@ import { importInvitations, importProfile, listInvitations, parseInvitations, pa
 import { findWarmIntro } from "./intro.js";
 import { cancelScheduled, listScheduled, runScheduledPosts } from "./schedule.js";
 import {
+  authorizationServerMetadata,
+  authorizeGet,
+  authorizePost,
+  protectedResourceMetadata,
+  registerClient,
+  tokenEndpoint,
+  verifyAccessToken,
+} from "./oauth.js";
+import {
   buildAuthUrl,
   confirmPublish,
   createDraftPost,
@@ -52,11 +61,13 @@ function safeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-function isAuthorized(request: Request, env: Env): boolean {
-  if (!env.MCP_TOKEN) return false;
+// รับได้ 2 แบบ: Bearer token เดิม (Claude Code) หรือ access token ที่ออกผ่าน OAuth (claude.ai)
+async function isAuthorized(request: Request, env: Env): Promise<boolean> {
   const header = request.headers.get("Authorization") ?? "";
   const match = /^Bearer (.+)$/.exec(header);
-  return match !== null && safeEqual(match[1], env.MCP_TOKEN);
+  if (!match) return false;
+  if (env.MCP_TOKEN && safeEqual(match[1], env.MCP_TOKEN)) return true;
+  return verifyAccessToken(env, match[1]);
 }
 
 const json = (data: unknown) => ({
@@ -494,6 +505,25 @@ export default {
       return new Response("linkedin-mcp ok", { status: 200 });
     }
 
+    // OAuth สำหรับ claude.ai
+    if (url.pathname === "/.well-known/oauth-protected-resource") {
+      return Response.json(protectedResourceMetadata(url.origin));
+    }
+    if (url.pathname === "/.well-known/oauth-authorization-server") {
+      return Response.json(authorizationServerMetadata(url.origin));
+    }
+    if (url.pathname === "/register" && request.method === "POST") {
+      return registerClient(env, request);
+    }
+    if (url.pathname === "/authorize") {
+      if (request.method === "GET") return authorizeGet(env, url);
+      if (request.method === "POST") return authorizePost(env, request);
+      return new Response("Method not allowed", { status: 405 });
+    }
+    if (url.pathname === "/token" && request.method === "POST") {
+      return tokenEndpoint(env, request);
+    }
+
     // หน้านโยบายความเป็นส่วนตัว (LinkedIn ต้องการ URL นี้ตอนสร้าง Developer App)
     if (url.pathname === "/privacy") {
       return new Response(
@@ -532,10 +562,12 @@ export default {
       return new Response("Not found", { status: 404 });
     }
 
-    if (!isAuthorized(request, env)) {
+    if (!(await isAuthorized(request, env))) {
       return new Response("Unauthorized", {
         status: 401,
-        headers: { "WWW-Authenticate": 'Bearer realm="linkedin-mcp"' },
+        headers: {
+          "WWW-Authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource"`,
+        },
       });
     }
 
