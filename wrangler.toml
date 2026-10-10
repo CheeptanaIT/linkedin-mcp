@@ -1,0 +1,16 @@
+name = "linkedin-mcp"
+main = "src/worker.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ฐานข้อมูล D1 ที่สร้างไว้แล้ว (uuid ff34b853-c4f8-43d5-a1c6-d4dda3cf7d93)
+[[d1_databases]]
+binding = "DB"
+database_name = "linkedin-mcp"
+database_id = "ff34b853-c4f8-43d5-a1c6-d4dda3cf7d93"
+
+# ตรวจคิวโพสต์ที่ตั้งเวลาไว้ทุก 5 นาที
+[triggers]
+crons = ["*/5 * * * *"]
+
+# MCP_TOKEN ไม่อยู่ในไฟล์นี้ ตั้งด้วยคำสั่ง: npx wrangler secret put MCP_TOKEN

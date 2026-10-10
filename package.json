@@ -1,0 +1,27 @@
+{
+  "name": "linkedin-mcp",
+  "version": "0.1.0",
+  "description": "LinkedIn MCP server: network CRM, job engine, and (later) posting and company page tools",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --disable-warning=ExperimentalWarning dist/index.js",
+    "dev": "tsc -p tsconfig.json && node --disable-warning=ExperimentalWarning dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "deploy": "wrangler deploy",
+    "import": "node scripts/import-linkedin.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.149.0"
+  }
+}
